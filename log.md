@@ -40,4 +40,11 @@ Registro cronológico de decisiones técnicas y de análisis.
 - **Ventana:** últimos 6 meses (~183 días) desde la ejecución. Se excluyen cancelados por defecto (`--include-cancelled` para incluirlos); en estos datos no hay cancelados.
 - La clasificación de zona vive en `app/canarias_tag/address.py` y se reutiliza en el requerimiento 4, para que ambos usen el mismo criterio de "Canarias".
 - **Resultado** (2026-05-13 → 2026-11-12): Península 854, Canarias 32, Baleares/Ceuta/Melilla 34; total 920. Se verificó contra un volcado completo de pedidos.
-- **Limitación:** #6491 no se cuenta porque no tiene el tag (es Baleares, no afecta a la comparación). Algunas líneas tienen atributos `stayai_*`, otra app de suscripciones. Todos esos pedidos tienen además los tags de Recharge, así que no hay suscriptores fuera del criterio.
+- **Limitación:** #6491 no se cuenta porque no tiene el tag (es Baleares, no afecta a la comparación). Algunas líneas tienen atributos `stayai_*`, otra app de suscripciones. Se verificó que los 1.568 pedidos con esas líneas tienen el tag `Subscription` y todos son recurrentes (ninguno es primer pedido), así que no hay suscriptores nuevos fuera del criterio.
+
+## 2026-11-12 — Fase 2: servidor de webhooks
+- FastAPI con `POST /webhooks` y `GET /health`. El HMAC se calcula sobre el body crudo antes de parsear el JSON y se compara con `hmac.compare_digest`. Se rechaza con 401 si la firma es inválida o si `X-Shopify-Shop-Domain` no es la tienda configurada.
+- Los handlers son síncronos (httpx y sqlite3) y se ejecutan en el threadpool (`run_in_threadpool`) para no bloquear el event loop.
+- El dispatcher aísla cada feature: si uno falla, el otro corre igual, y se responde 500 para que Shopify reintente. Consecuencia: **todos los handlers tienen que ser idempotentes**, porque un reintento vuelve a ejecutar también el que ya había funcionado. El req. 3 lo resuelve con `processed_webhooks` y el req. 4 con la comparación de hash.
+- Los tests nunca leen el `.env` real: `conftest.py` define variables ficticias antes de importar la app (`load_dotenv` no pisa variables existentes).
+- Verificado con el servidor real: HMAC inválido → 401, HMAC válido → 200.
