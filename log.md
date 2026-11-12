@@ -80,3 +80,15 @@ Registro cronológico de decisiones técnicas y de análisis.
   - Un cambio entre dos direcciones canarias (ej. Las Palmas → Tenerife) **sí** agrega el tag. Es la lectura literal del requerimiento: se editó la dirección y la nueva es de Canarias.
   - **No se verifica que el autor del cambio sea staff de CX.** El webhook no lo informa de forma fiable. La alternativa sería consultar los `events` del pedido; queda fuera del alcance.
   - **Pedidos anteriores al despliegue:** no tienen línea base, así que su primer `orders/updated` solo la inicializa y no taggea. Mitigación posible: un script que siembre la línea base en los pedidos abiertos al desplegar.
+
+## 2026-11-12 — Pruebas reales en la tienda dev
+- **Túnel:** Cloudflare *quick tunnel* (el primer intento devolvió 429; funcionó al reintentar). Las suscripciones se registraron sin pedir aprobación de *protected customer data*. Una segunda corrida de `register_webhooks.py` no cambió nada, y las suscripciones de la otra instalación quedaron intactas.
+- **#6502 (Madrid 28001):**
+  - creado → insertado en SQLite con 2 líneas, metafield de línea base, sin tag;
+  - editado quitando un producto → la línea quedó con `current_quantity = 0` y el total bajó de 72.00 a 33.00;
+  - dirección cambiada a Las Palmas 35001 → **un único `tagsAdd`**; el `orders/updated` siguiente, generado por nuestras escrituras, dio "sin cambios de dirección" (sin bucle);
+  - cancelado → `cancelled_at` registrado.
+- **#6503 (Santa Cruz de Tenerife 38001), creado directamente en Canarias:** no recibió el tag.
+- **Comportamientos reales observados que el diseño ya contemplaba:**
+  - `orders/create` y `orders/updated` llegan casi en simultáneo. En #6503, el `updated` llegó **antes** que el `create`: el upsert de SQLite y la línea base del metafield lo toleran porque ambos son idempotentes.
+  - Tiempos de respuesta entre 0,1 y 2,2 s, por debajo del límite de 5 s de Shopify. Las llamadas a la Admin API del req. 4 son las que más pesan. En producción, con más volumen, convendría responder 200 de inmediato y procesar en una cola.
