@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 Handler = Callable[[str, str, dict], str]
 """handler(topic, webhook_id, payload) -> descripción corta del resultado."""
 
-# topic -> lista de (nombre del feature, handler). Se completa en register_handlers().
 HANDLERS: dict[str, list[tuple[str, Handler]]] = {}
 
 

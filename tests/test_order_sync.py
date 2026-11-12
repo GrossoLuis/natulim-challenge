@@ -106,7 +106,6 @@ def test_pedido_anterior_al_inicio_se_ignora(conn):
     old["created_at"] = "2026-10-01T00:00:00Z"
     assert _upsert(conn, old, "wh-1") == repository.SKIPPED_BEFORE_START
     assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
-    # el webhook queda registrado como procesado
     assert conn.execute("SELECT COUNT(*) FROM processed_webhooks").fetchone()[0] == 1
 
 

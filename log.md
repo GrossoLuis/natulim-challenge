@@ -5,7 +5,7 @@ Registro cronológico de las decisiones técnicas y de análisis que fui tomando
 
 ## 2026-11-12. Inicio
 
-- Recibí del Lead Tech el acceso a la tienda de desarrollo y las credenciales.
+- Recibí del Lead el acceso a la tienda de desarrollo y las credenciales.
 - Plan de trabajo: un único servicio FastAPI que recibe los webhooks de Shopify y resuelve los requerimientos 3 y 4, más scripts auxiliares para registrar los webhooks, reconciliar pedidos e inspeccionar pedidos.
 
 
@@ -118,4 +118,4 @@ Registro cronológico de las decisiones técnicas y de análisis que fui tomando
 ## 2026-11-12. Documentación
 
 - Redacté la documentación sin tablas, en párrafos y listas simples, para que se lea bien tanto en GitHub como en un editor de texto.
-- En el documento de entrega, respondí que los requerimientos 3 y 4 pueden pasar a producción: la lógica está terminada y probada, y lo que falta son tareas de puesta en marcha (servidor, aplicación en la tienda productiva y tareas programadas), no desarrollo.
+- En el documento final entregable (`docs/DOCUMENTO_FINAL_ENTREGABLE.md`), respondí que los requerimientos 3 y 4 pueden pasar a producción: la lógica está terminada y probada, y lo que falta son tareas de puesta en marcha (servidor, aplicación en la tienda productiva y tareas programadas), no desarrollo.

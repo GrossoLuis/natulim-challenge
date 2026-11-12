@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 from app.config import parse_iso_datetime
 
-# Resultados posibles de una escritura
 INSERTED = "insertado"
 UPDATED = "actualizado"
 SKIPPED_OLD = "omitido: updated_at anterior al guardado"

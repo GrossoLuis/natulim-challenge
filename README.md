@@ -181,7 +181,7 @@ Los tests no usan el archivo `.env` ni se conectan a Shopify: trabajan con una c
 - `app/canarias_tag/`: requerimiento 4 (clasificación de direcciones y lógica del tag).
 - `scripts/`: registro de webhooks, reconciliación y scripts de análisis.
 - `tests/`: tests de la verificación de firma, la sincronización y el marcado.
-- `docs/`: arquitectura, diagnóstico del requerimiento 2 y documento de entrega.
+- `docs/`: arquitectura, diagnóstico del requerimiento 2 y el documento final entregable (`DOCUMENTO_FINAL_ENTREGABLE.md`).
 - `data/`: carpeta donde se crea la base `orders.db` (excluida de git).
 - `log.md`: registro cronológico de las decisiones que tomé durante el trabajo.
 
