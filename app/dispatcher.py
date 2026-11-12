@@ -31,7 +31,13 @@ def register(topic: str, feature: str, handler: Handler) -> None:
 
 def register_handlers() -> None:
     """Registra los handlers de los requerimientos 3 y 4."""
+    from app.order_sync import handlers as order_sync
+
     HANDLERS.clear()
+    order_sync.setup()
+    for topic in ("orders/create", "orders/updated", "orders/cancelled"):
+        register(topic, "order_sync", order_sync.handle_upsert)
+    register("orders/delete", "order_sync", order_sync.handle_delete)
 
 
 def dispatch(topic: str, webhook_id: str, payload: dict) -> dict[str, str]:
