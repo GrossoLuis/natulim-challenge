@@ -6,6 +6,8 @@ o GraphQL (countryCodeV2, provinceCode, zip).
 
 from __future__ import annotations
 
+import hashlib
+
 CANARIAS_PROVINCE_CODES = {"GC", "TF"}  # Las Palmas, Santa Cruz de Tenerife
 CANARIAS_ZIP_PREFIXES = ("35", "38")
 
@@ -51,3 +53,27 @@ def zona_espana(addr: dict | None) -> str:
     if province in NO_PENINSULA_PROVINCE_CODES or zip_code.startswith(NO_PENINSULA_ZIP_PREFIXES):
         return "otras_es"
     return "peninsula"
+
+
+HASH_FIELDS = ("address1", "address2", "city", "zip", "province_code", "country_code")
+_GRAPHQL_ALIASES = {"province_code": "provinceCode", "country_code": "countryCodeV2"}
+
+
+def _norm_hash_field(value) -> str:
+    return " ".join(str(value or "").split()).lower()
+
+
+def hash_direccion(addr: dict | None) -> str:
+    """SHA-256 de los campos de la dirección normalizados (minúsculas, espacios colapsados).
+
+    Dirección ausente → "none". Es estable ante mayúsculas y espacios.
+    """
+    if not addr:
+        return "none"
+    parts = []
+    for field in HASH_FIELDS:
+        value = addr.get(field)
+        if value is None and field in _GRAPHQL_ALIASES:
+            value = addr.get(_GRAPHQL_ALIASES[field])
+        parts.append(_norm_hash_field(value))
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()

@@ -31,6 +31,7 @@ def register(topic: str, feature: str, handler: Handler) -> None:
 
 def register_handlers() -> None:
     """Registra los handlers de los requerimientos 3 y 4."""
+    from app.canarias_tag import handlers as canarias_tag
     from app.order_sync import handlers as order_sync
 
     HANDLERS.clear()
@@ -38,6 +39,8 @@ def register_handlers() -> None:
     for topic in ("orders/create", "orders/updated", "orders/cancelled"):
         register(topic, "order_sync", order_sync.handle_upsert)
     register("orders/delete", "order_sync", order_sync.handle_delete)
+    register("orders/create", "canarias_tag", canarias_tag.handle_create)
+    register("orders/updated", "canarias_tag", canarias_tag.handle_updated)
 
 
 def dispatch(topic: str, webhook_id: str, payload: dict) -> dict[str, str]:
