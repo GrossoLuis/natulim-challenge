@@ -28,6 +28,7 @@ class Settings:
     client_secret: str | None
     webhook_secret: str
     public_base_url: str | None
+    webhook_owner: str | None
     database_path: Path
     sync_start_at: datetime | None
     canarias_tag: str
@@ -93,6 +94,7 @@ def load_settings() -> Settings:
         client_secret=client_secret,
         webhook_secret=webhook_secret,
         public_base_url=public_base_url.rstrip("/") if public_base_url else None,
+        webhook_owner=_get("WEBHOOK_OWNER"),
         database_path=database_path,
         sync_start_at=sync_start_at,
         canarias_tag=_get("CANARIAS_TAG", "cambio_a_pedido_para_canarias"),
@@ -104,6 +106,15 @@ def load_settings() -> Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return load_settings()
+
+
+def webhook_url(settings: Settings) -> str:
+    """URL de destino de los webhooks propios: {PUBLIC_BASE_URL}/webhooks?owner={WEBHOOK_OWNER}."""
+    if not settings.public_base_url:
+        raise ConfigError("Falta PUBLIC_BASE_URL (URL pública del túnel).")
+    if not settings.webhook_owner:
+        raise ConfigError("Falta WEBHOOK_OWNER (identificador de las suscripciones propias).")
+    return f"{settings.public_base_url}/webhooks?owner={settings.webhook_owner}"
 
 
 def mask_secret(value: str | None) -> str:
