@@ -1,89 +1,91 @@
 # Arquitectura
 
-## Flujo
+En este documento explico cómo está organizado el servicio y por qué tomé cada una de las decisiones principales de diseño.
+
+
+## Flujo general
 
 ```
-                      ┌──────────────────────────────── Shopify ───────────────────────────────┐
-                      │  orders/create · orders/updated · orders/cancelled · orders/delete     │
-                      └───────────────┬──────────────────────────────────────▲─────────────────┘
-                                      │ POST (HMAC-SHA256)                   │ GraphQL Admin API
-                                      ▼                                      │ (tagsAdd, metafieldsSet,
-                            ┌───────────────────┐                            │  order query, reconcile)
-                            │   Túnel HTTPS     │                            │
-                            └─────────┬─────────┘                            │
-                                      ▼                                      │
-                  ┌──────────────── FastAPI (app/main.py) ────────────────┐  │
-                  │ 1. lee el body crudo   2. verifica HMAC y tienda      │  │
-                  │ 3. parsea JSON         4. dispatcher.dispatch()       │  │
-                  │ 200 si todo OK · 401 firma inválida · 500 → reintento │  │
-                  └───────────────────────────┬───────────────────────────┘  │
-                                              ▼                              │
-                               ┌────── dispatcher.py ──────┐                 │
-                               │ cada feature, aislado     │                 │
-                               └─────┬───────────────┬─────┘                 │
-                                     ▼               ▼                       │
-                           ┌──────────────┐   ┌──────────────────┐           │
-                           │ order_sync   │   │ canarias_tag     │───────────┘
-                           │ (req. 3)     │   │ (req. 4)         │
-                           └──────┬───────┘   └──────────────────┘
-                                  ▼
-                           ┌──────────────┐        ┌─────────────────────┐
-                           │ SQLite       │◀───────│ scripts/reconcile.py│──▶ GraphQL Admin API
-                           │ orders.db    │        │ (cron)              │
-                           └──────────────┘        └─────────────────────┘
+Shopify (orders/create, orders/updated, orders/cancelled, orders/delete)
+   |
+   |  notificación firmada con HMAC-SHA256
+   v
+Túnel o servidor HTTPS
+   |
+   v
+FastAPI  POST /webhooks  (app/main.py)
+   |  1. lee el contenido original de la notificación
+   |  2. verifica la firma y la tienda de origen
+   |  3. pasa la notificación al dispatcher
+   v
+Dispatcher  (app/dispatcher.py)
+   |
+   +--> order_sync    (requerimiento 3) --> base SQLite  data/orders.db
+   |
+   +--> canarias_tag  (requerimiento 4) --> Admin API de Shopify (tag y metafield)
+
+scripts/reconcile.py  (tarea programada) --> Admin API de Shopify --> base SQLite
 ```
 
-## Por qué webhooks y no polling
+El servicio responde a Shopify con 200 si procesó la notificación correctamente, con 401 si la firma no es válida y con 500 si falló el procesamiento. En este último caso, Shopify vuelve a enviar la notificación más tarde.
 
-- **Tiempo casi real:** el pedido está en la base segundos después de crearse o modificarse.
-- **Costo:** solo hay tráfico cuando algo cambia. Con polling habría que consultar la API cada pocos minutos, consumir rate limit y aun así tener retraso.
-- **Cobertura de cambios:** Shopify emite `orders/updated` ante cualquier cambio (ediciones, dirección, tags, pagos, fulfillment) y `orders/cancelled` / `orders/delete` para los estados finales.
 
-## Por qué también una reconciliación
+## Por qué usé webhooks y no consultas periódicas
 
-Shopify no garantiza la entrega de los webhooks: reintenta durante un tiempo y después elimina la suscripción si el endpoint sigue fallando. Además, durante un deploy o una caída del servicio se pierden eventos.
+Con webhooks, Shopify avisa al servicio cada vez que un pedido se crea o cambia, y el pedido queda guardado en la base pocos segundos después. Si en cambio el servicio consultara la API cada pocos minutos, habría siempre un retraso, se consumiría el límite de consultas de la API aunque no hubiera cambios y sería más difícil detectar todas las modificaciones. Además, Shopify envía `orders/updated` ante cualquier cambio del pedido (productos, dirección, tags, pagos o envío), y `orders/cancelled` y `orders/delete` para la cancelación y el borrado.
 
-`reconcile.py` trae por API los pedidos con `updated_at` posterior a la última reconciliación exitosa y aplica **el mismo upsert** que los webhooks:
-- `from_webhook()` y `from_graphql()` normalizan las dos fuentes al mismo `dict`, así que no hay lógica duplicada.
-- El punto de partida es el inicio de la última corrida y no `MAX(synced_at)`, porque si un webhook se pierde y después llegan otros, `MAX(synced_at)` avanza y el pedido perdido no se recuperaría nunca.
 
-## Idempotencia y orden de los eventos
+## Por qué agregué una reconciliación
 
-Shopify puede entregar un evento más de una vez y en cualquier orden. En la tienda dev se observó un `orders/updated` que llegó **antes** que el `orders/create` del mismo pedido.
+Shopify no garantiza que todas sus notificaciones lleguen. Si el servicio no responde, Shopify reintenta durante un tiempo, y si los fallos continúan, termina eliminando la suscripción. También se pueden perder notificaciones durante un despliegue o una caída del servidor.
 
-| Riesgo | Mitigación |
-|---|---|
-| Evento duplicado o reintento | `processed_webhooks` (por `X-Shopify-Webhook-Id`), registrado en la misma transacción que el upsert |
-| Evento atrasado | Se compara `updated_at` (como datetime con zona horaria). Si es anterior al guardado, se ignora |
-| Ediciones de líneas | Cada upsert reemplaza todas las líneas y guarda `current_quantity`: una línea quitada con *Edit* queda con 0 |
-| Un feature falla y el otro no | El dispatcher ejecuta ambos, responde 500 y Shopify reintenta. El que ya funcionó es idempotente |
+Por eso agregué `scripts/reconcile.py`, que consulta por API los pedidos modificados desde la última reconciliación y los guarda con exactamente la misma lógica que usan los webhooks. Para no duplicar código, el servicio tiene dos funciones que convierten los datos de cada fuente al mismo formato: `from_webhook()` para las notificaciones y `from_graphql()` para las consultas.
 
-## Por qué un metafield para el requerimiento 4
+La reconciliación toma como punto de partida la fecha de su última ejecución exitosa, con 10 minutos de margen. Descarté usar la fecha del último pedido sincronizado: si una notificación se pierde y después llegan otras, esa fecha avanza y el pedido perdido no se recuperaría nunca.
 
-`orders/updated` no indica **qué** cambió. Para saber si la dirección *cambió a* Canarias, y no si *es* de Canarias, hace falta la dirección anterior. El requerimiento pide no usar base de datos, así que el estado se guarda en el propio pedido:
+
+## Cómo manejo duplicados y notificaciones desordenadas
+
+Shopify puede enviar la misma notificación más de una vez y no garantiza el orden de llegada. En la tienda de desarrollo lo comprobé: la notificación de actualización de un pedido llegó antes que la de su creación. Para que esto no genere errores, el servicio se protege de cuatro formas:
+
+- **Notificaciones repetidas.** Cada notificación tiene un identificador único (`X-Shopify-Webhook-Id`). El servicio lo registra en la tabla `processed_webhooks`, en la misma transacción en que guarda el pedido, e ignora cualquier notificación que ya haya procesado.
+- **Notificaciones atrasadas.** El servicio compara la fecha de actualización de la notificación con la del pedido guardado y, si es anterior, la ignora. La comparación se hace sobre fechas con zona horaria, no sobre texto, porque Shopify puede expresar la misma hora con distintas zonas.
+- **Ediciones de productos.** Cada vez que se actualiza un pedido, se reemplazan todas sus líneas. Además, cada línea guarda la cantidad vigente: si un producto se quita con la opción Editar, su cantidad queda en 0.
+- **Fallo parcial.** Si uno de los dos procesos falla y el otro no, el servicio responde con un error para que Shopify reintente. Esto no genera duplicados, porque los dos procesos pueden ejecutarse varias veces con el mismo resultado.
+
+
+## Por qué uso un metafield en el requerimiento 4
+
+La notificación `orders/updated` no indica qué cambió en el pedido. Para saber si la dirección de envío *cambió a* Canarias, y no simplemente si *es* de Canarias, el servicio necesita conocer la dirección anterior. Como el requerimiento no usa base de datos, guardo esa información en el propio pedido, en un metafield:
 
 ```
-natulim.shipping_address_hash = "<sha256 de la dirección normalizada>|<updated_at del evento>"
+natulim.shipping_address_hash = "<huella de la dirección>|<fecha de la notificación>"
 ```
 
-- `orders/create` guarda la línea base. Un pedido que nace en Canarias no recibe el tag.
-- `orders/updated`:
-  - **sin metafield:** inicializa la línea base;
-  - **evento más viejo que el estado guardado:** lo ignora;
-  - **mismo hash:** no hace **ninguna** escritura;
-  - **hash distinto:** si la nueva dirección es de Canarias, agrega el tag (salvo que ya esté); en todos los casos actualiza el metafield.
+La huella es un código SHA-256 calculado a partir de la dirección normalizada (en minúsculas y sin espacios repetidos), de modo que dos direcciones iguales escritas con distintas mayúsculas o espacios dan la misma huella.
 
-La regla "mismo hash, ninguna escritura" es la que corta el bucle: `tagsAdd` y `metafieldsSet` generan a su vez un `orders/updated`, que llega con la misma dirección y por lo tanto no escribe nada.
+El funcionamiento es el siguiente:
 
-Un metafield es un dato nativo de Shopify: viaja con el pedido, no requiere infraestructura y se puede consultar desde el admin o la API.
+- **Al crearse un pedido,** el servicio guarda la huella de su dirección y no agrega el tag, porque un pedido que nace con dirección en Canarias no tuvo un cambio de dirección.
+- **Al actualizarse un pedido:**
+  - si no tiene metafield, el servicio guarda la huella de la dirección actual;
+  - si la notificación es más antigua que la información guardada, la ignora;
+  - si la huella es la misma, no escribe nada;
+  - si la huella cambió y la nueva dirección es de Canarias, agrega el tag (si no lo tenía) y actualiza el metafield. Si no es de Canarias, solo actualiza el metafield.
 
-## Criterio de "Canarias"
+La regla de no escribir nada cuando la huella no cambió evita un ciclo infinito. Cuando el servicio agrega el tag o actualiza el metafield, Shopify envía una nueva notificación `orders/updated`. Esa notificación trae la misma dirección, así que el servicio no escribe nada y el ciclo se detiene. En la prueba real, el tag se agregó una sola vez.
 
-`app/canarias_tag/address.py` es la única fuente del criterio. La comparten el req. 1 (reporte) y el req. 4 (tag):
+Elegí un metafield porque es un dato nativo de Shopify: viaja con el pedido, no requiere infraestructura adicional y se puede consultar desde el admin o la API.
 
-- Canarias: país `ES` y (provincia `GC`/`TF` **o** CP `35xxx`/`38xxx`). Se usan las dos señales porque la provincia puede venir vacía o mal cargada; el CP es la más robusta.
-- Península: `ES` sin Canarias, Baleares (`07`/`PM`), Ceuta (`51`/`CE`) ni Melilla (`52`/`ML`).
 
-## Respuesta a Shopify
+## Criterio para identificar Canarias y Península
 
-Shopify espera respuesta en menos de 5 segundos. En las pruebas, el tiempo fue de 0,1 a 2,2 s. La mayor parte corresponde a las llamadas a la Admin API del req. 4. Con más volumen, el paso siguiente es responder 200 tras validar el HMAC y procesar los eventos en una cola (Redis, SQS, o una tabla de pendientes). La idempotencia que ya tienen los handlers lo permite sin cambios de lógica.
+El criterio está definido en un solo lugar, `app/canarias_tag/address.py`, y lo usan tanto el reporte del requerimiento 1 como el marcado del requerimiento 4, para que ambos den siempre el mismo resultado.
+
+- **Canarias:** dirección en España con provincia Las Palmas (`GC`) o Santa Cruz de Tenerife (`TF`), o con código postal que empieza por 35 o 38. Uso las dos señales porque la provincia puede venir vacía o mal cargada, mientras que el código postal es más confiable.
+- **Península:** dirección en España que no es de Canarias, Baleares (código postal 07), Ceuta (51) ni Melilla (52).
+
+
+## Tiempo de respuesta
+
+Shopify espera una respuesta en menos de 5 segundos. En las pruebas, el servicio respondió en tiempos de entre 0,1 y 2,2 segundos. La mayor parte de ese tiempo corresponde a las consultas a la Admin API del requerimiento 4. Si el volumen crece, el siguiente paso sería responder a Shopify inmediatamente después de verificar la firma y procesar las notificaciones desde una cola. El código ya está preparado para ese cambio, porque procesar dos veces la misma notificación no genera errores ni duplicados.
