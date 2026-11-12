@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,8 @@ TEST_ENV = {
     "SHOPIFY_WEBHOOK_SECRET": "secreto-de-test",
     "PUBLIC_BASE_URL": "",
     "SYNC_START_AT": "2026-11-01T00:00:00Z",
+    "WEBHOOK_OWNER": "test",
+    "DATABASE_PATH": str(Path(tempfile.mkdtemp()) / "orders.db"),
 }
 os.environ.update(TEST_ENV)
 

@@ -48,3 +48,22 @@ Registro cronológico de decisiones técnicas y de análisis.
 - El dispatcher aísla cada feature: si uno falla, el otro corre igual, y se responde 500 para que Shopify reintente. Consecuencia: **todos los handlers tienen que ser idempotentes**, porque un reintento vuelve a ejecutar también el que ya había funcionado. El req. 3 lo resuelve con `processed_webhooks` y el req. 4 con la comparación de hash.
 - Los tests nunca leen el `.env` real: `conftest.py` define variables ficticias antes de importar la app (`load_dotenv` no pisa variables existentes).
 - Verificado con el servidor real: HMAC inválido → 401, HMAC válido → 200.
+
+## 2026-11-12 — Fase 3: registro de webhooks
+- En la API 2026-10 el destino de `WebhookSubscriptionInput` es `uri` (verificado en la documentación); `format: JSON`.
+- **Desvío del brief:** la app `sevica-dev` es compartida y ya tiene suscripciones de otra instalación. Actualizar "la suscripción del topic" le cambiaría la URL a otra persona. Por eso cada suscripción propia lleva el marcador `?owner={WEBHOOK_OWNER}` en la URL, y `register_webhooks.py` solo crea, actualiza o borra las que lo tienen; las demás no se tocan. En producción, con una app dedicada, el marcador no molesta y deja el mismo comportamiento.
+- `register_webhooks.py --delete` elimina las suscripciones propias, para no dejar webhooks apuntando a un túnel muerto al terminar.
+- `list_webhooks.py` marca cada suscripción como `propia` u `otra`.
+- **Túnel:** Cloudflare respondió 429 al pedir un *quick tunnel*; se reintenta manualmente o se usa ngrok.
+
+## 2026-11-12 — Fase 4: sincronización a SQLite
+- **Esquema:** el del brief más dos agregados.
+  - `order_lines.current_quantity`: en los webhooks REST, una línea quitada con *Edit* sigue en `line_items` con `current_quantity = 0`. Guardar solo `quantity` (la original) no reflejaría las ediciones. Se guardan ambas.
+  - Tabla `sync_state`: guarda el inicio de la última reconciliación.
+- **Precios:** se guardan como TEXT, tal como los manda Shopify, para no perder precisión decimal. Se usan los totales `current_*`, que reflejan ediciones y reembolsos parciales.
+- **Fechas:** se comparan como `datetime` con zona horaria. El test `test_comparacion_con_zonas_horarias_distintas` cubre el caso en que la comparación como string da el resultado equivocado.
+- **Transacciones:** dedup por `X-Shopify-Webhook-Id` en la misma transacción que el upsert (`BEGIN IMMEDIATE`). Los webhooks omitidos por corte temporal o por antigüedad igual quedan registrados como procesados.
+- **Estados normalizados** entre webhook y GraphQL: `financial_status` en minúsculas. `fulfillment_status`: `null` → `unfulfilled`, `partial` → `partially_fulfilled`.
+- **`SYNC_START_AT` es obligatorio** para arrancar el servicio: si faltara, se sincronizarían pedidos viejos, lo que contradice lo acordado.
+- **Reconciliación, desvío del brief:** el brief proponía partir de `MAX(synced_at) - 10 min`. Si un webhook se pierde y después llegan otros, `MAX(synced_at)` avanza y el pedido perdido no se recupera nunca. Se parte del **inicio de la última reconciliación exitosa** menos 10 minutos (guardado en `sync_state`); la primera vez, de `SYNC_START_AT`.
+- Verificado contra la tienda dev: `reconcile.py` insertó el pedido de prueba más reciente con sus líneas; una segunda corrida no duplica.

@@ -56,7 +56,8 @@ def test_webhook_tienda_distinta_401(client):
     assert _post(client, body, compute_hmac(body, SECRET), shop="otra.myshopify.com").status_code == 401
 
 
-def test_webhook_hmac_valido_200(client):
+def test_webhook_hmac_valido_200(client, monkeypatch):
+    monkeypatch.setattr(dispatcher, "HANDLERS", {})  # solo se prueba la capa HTTP
     body = json.dumps({"id": 1, "name": "#1001"}).encode()
     assert _post(client, body, compute_hmac(body, SECRET)).status_code == 200
 
