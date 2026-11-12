@@ -27,3 +27,17 @@ Registro cronológico de decisiones técnicas y de análisis.
 - **Hallazgo 3 (impacta en las fases 3–5):** la tienda dev y la app `sevica-dev` son **compartidas**. Ya existen suscripciones `ORDERS_CREATE/UPDATED/DELETE` de otra persona apuntando a su propio túnel, y hay pedidos de prueba recientes de terceros (#6498–#6501). **Desvío del plan:** `register_webhooks.py` no va a actualizar suscripciones que no sean propias. Va a identificar las nuestras por un marcador en la URL y solo va a crear o borrar esas. Además, los handlers deben tolerar cambios hechos por otros procesos sobre los mismos pedidos.
 - Requerimiento 1: los pedidos tienen los tags de Recharge `Subscription First Order` / `Subscription Recurring Order`, de modo que se puede responder con números a partir de la tienda (ver fase correspondiente).
 - Detalle y conclusiones en `docs/diagnostico_pedidos.md`.
+
+## 2026-11-12 — Requerimiento 2: conclusiones revisadas
+- El evento de edición de #6491 (2026-11-10) modificó los atributos `rc_charge_id`, `rc_address_id`, `rc_subscription_ids`, `rc_payment_transaction_id` y los de tracking web. El escenario reproduce un primer pedido de suscripción que Recharge no terminó de registrar.
+- Se comparó contra la base: de 921 primeros pedidos de suscripción pagados en Shopify Checkout, 920 tienen `rc_charge_id` y tag `Subscription First Order`. #6491 es el único sin ambos.
+- **Decisión:** el diagnóstico se basa en la variable "estado de Recharge del pedido" y no en "tipo de Pack", porque los dos Packs se comportan igual en Shopify en el 100 % de los pedidos.
+- Se trabaja sin consultas adicionales al Lead Tech: las respuestas se fundamentan con los datos de la tienda y los supuestos quedan explícitos.
+
+## 2026-11-12 — Requerimiento 1: suscriptores nuevos
+- **Definición:** suscriptor nuevo = pedido con el tag de Recharge `Subscription First Order`. Recharge pone ese tag en el primer pedido de cada suscripción. Se reportan pedidos y clientes únicos; en estos datos coinciden.
+- **Zonas** (por dirección de envío): Canarias = ES con CP 35/38 o provincia GC/TF. Península = ES sin Canarias, Baleares (07), Ceuta (51) ni Melilla (52). Baleares, Ceuta y Melilla se reportan aparte para que el total cuadre.
+- **Ventana:** últimos 6 meses (~183 días) desde la ejecución. Se excluyen cancelados por defecto (`--include-cancelled` para incluirlos); en estos datos no hay cancelados.
+- La clasificación de zona vive en `app/canarias_tag/address.py` y se reutiliza en el requerimiento 4, para que ambos usen el mismo criterio de "Canarias".
+- **Resultado** (2026-05-13 → 2026-11-12): Península 854, Canarias 32, Baleares/Ceuta/Melilla 34; total 920. Se verificó contra un volcado completo de pedidos.
+- **Limitación:** #6491 no se cuenta porque no tiene el tag (es Baleares, no afecta a la comparación). Algunas líneas tienen atributos `stayai_*`, otra app de suscripciones. Todos esos pedidos tienen además los tags de Recharge, así que no hay suscriptores fuera del criterio.
