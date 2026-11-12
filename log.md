@@ -67,3 +67,16 @@ Registro cronológico de decisiones técnicas y de análisis.
 - **`SYNC_START_AT` es obligatorio** para arrancar el servicio: si faltara, se sincronizarían pedidos viejos, lo que contradice lo acordado.
 - **Reconciliación, desvío del brief:** el brief proponía partir de `MAX(synced_at) - 10 min`. Si un webhook se pierde y después llegan otros, `MAX(synced_at)` avanza y el pedido perdido no se recupera nunca. Se parte del **inicio de la última reconciliación exitosa** menos 10 minutos (guardado en `sync_state`); la primera vez, de `SYNC_START_AT`.
 - Verificado contra la tienda dev: `reconcile.py` insertó el pedido de prueba más reciente con sus líneas; una segunda corrida no duplica.
+
+## 2026-11-12 — Fase 5: tag por cambio de dirección a Canarias
+- **El problema clave:** `orders/updated` se dispara ante cualquier cambio y no dice qué cambió. Mirando solo si la dirección actual es de Canarias, se taggearían pedidos que **nacieron** con dirección canaria, y eso no es un cambio. Hace falta la dirección anterior. Como el requerimiento no usa base de datos, ese estado se guarda **en el propio pedido**, en el metafield `natulim.shipping_address_hash`. Es un dato nativo de Shopify, no una base externa.
+- **Formato del metafield:** `<sha256 de la dirección>|<updated_at del evento>`. **Agregado al brief:** el `updated_at` permite descartar webhooks que llegan atrasados (Shopify no garantiza el orden), así un evento viejo no pisa un estado más nuevo.
+- **Bucle:** `tagsAdd` y `metafieldsSet` disparan otro `orders/updated`. Ese evento trae la misma dirección, el hash coincide y no se escribe nada. Hay un test específico para esto.
+- El tag se decide con los `tags` leídos **en el momento** por GraphQL, no con los del payload, que pueden estar desactualizados.
+- **Criterio de Canarias:** el mismo que en el requerimiento 1 (`es_canarias`: provincia GC/TF o CP 35/38, solo España). Acepta direcciones en formato REST y GraphQL.
+- **App compartida:** si el metafield tiene un valor que no respeta nuestro formato (por ejemplo, otra instalación usando la misma clave), se trata como ausente y se reinicia la línea base, en lugar de fallar. El namespace y la clave son configurables (`ADDRESS_METAFIELD_*`).
+- **Decisiones de alcance:**
+  - El tag **no se quita** si después la dirección deja de ser canaria: registra que *hubo* un cambio a Canarias.
+  - Un cambio entre dos direcciones canarias (ej. Las Palmas → Tenerife) **sí** agrega el tag. Es la lectura literal del requerimiento: se editó la dirección y la nueva es de Canarias.
+  - **No se verifica que el autor del cambio sea staff de CX.** El webhook no lo informa de forma fiable. La alternativa sería consultar los `events` del pedido; queda fuera del alcance.
+  - **Pedidos anteriores al despliegue:** no tienen línea base, así que su primer `orders/updated` solo la inicializa y no taggea. Mitigación posible: un script que siembre la línea base en los pedidos abiertos al desplegar.
